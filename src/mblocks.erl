@@ -8,5 +8,6 @@
 %% API.
 
 start() ->
+	ok = application:start(sasl),
 	ok = application:start(ranch),
 	ok = application:start(mblocks).
