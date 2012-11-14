@@ -2,5 +2,8 @@
 all:
 	rebar compile
 
+clean:
+	rebar clean
 
-.PHONY: all
+
+.PHONY: all clean
