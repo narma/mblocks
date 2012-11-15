@@ -32,7 +32,7 @@ packet_size([], []) ->
 	[];
 
 packet_size([], Acc) ->
-	lists:filter(fun(A) -> case A of 0 -> false; _ -> true end end, lists:reverse(Acc));
+  [X || X <- lists:reverse(Acc), X =/= 0];
 
 packet_size([DataType|DataTypes], []) ->
 	case type_size(DataType) of  
