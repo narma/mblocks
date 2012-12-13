@@ -11,9 +11,9 @@
 %% API.
 
 start(_Type, _Args) ->
-	{ok, _} = ranch:start_listener(mblocks, 1,
-		ranch_tcp, [{port, 25565}], minecraft_protocol, []),
-	mblocks_sup:start_link().
+    mblocks_sup:start_link(),
+	{ok, _} = ranch:start_listener(mblocks, 100,
+		ranch_tcp, [{port, 25565}], minecraft_protocol, []).
 
 stop(_State) ->
 	ok.
