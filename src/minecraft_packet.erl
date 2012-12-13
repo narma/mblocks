@@ -35,7 +35,7 @@ packet_size([], Acc) ->
   [X || X <- lists:reverse(Acc), X =/= 0];
 
 packet_size([DataType|DataTypes], []) ->
-	case type_size(DataType) of  
+	case type_size(DataType) of
 		S when is_integer(S) -> packet_size(DataTypes, [S]);
 		_ -> packet_size(DataTypes, [DataType])
 	end;
@@ -75,7 +75,7 @@ get_header(20) -> {ok, spawn_named_entity, [int, string, abs_int, abs_int, abs_i
 get_header(21) -> {ok, spawn_dropped_item, [int, slot, abs_int, abs_int, abs_int, byte, byte, byte]};
 get_header(22) -> {ok, collect_item, [int, int]};
 get_header(23) -> {ok, spawn_object, [int, byte, abs_int, abs_int, abs_int, object_speed]};
-get_header(24) -> {ok, spawn_mob, [int, byte, abs_int, abs_int, abs_int, 
+get_header(24) -> {ok, spawn_mob, [int, byte, abs_int, abs_int, abs_int,
 						byte, byte, byte, short, short, short, metadata]};
 get_header(25) -> {ok, spawn_painting, [int, string, int, int, int, int]};
 get_header(26) -> {ok, spawn_experience_orb, [int, abs_int, abs_int, abs_int, short]};

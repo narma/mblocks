@@ -14,32 +14,28 @@ start_link(ListenerPid, Socket, Transport, Opts) ->
 
 init(ListenerPid, Socket, Transport, _Opts = []) ->
 	ok = ranch:accept_ack(ListenerPid),
-	%% gen_server:start_link(mblocks_player, [Transport, Socket], _Opt) 
-	loop(Socket, Transport).
+	Writer = spawn_link(?MODULE, async_writer, [Transport, Socket]),
+	{ok, PlayerPid} = mb_player:start_link([Writer], []),
+	loop(Socket, Transport, PlayerPid).
 
-loop(Socket, Transport) ->
+loop(Socket, Transport, PlayerPid) ->
 	case Transport:recv(Socket, 1, 5000) of
 		{ok, <<PacketId:8>>} ->
-			io:format("PacketId: ~p~n", [PacketId]),
 			{ok, PacketName, DataTypes} = minecraft_packet:get_header(PacketId),
-			io:format("DataTypes: ~p~n", [DataTypes]),
-			{ok, Packet} = read_full_packet(Socket, Transport, DataTypes),
-			io:format("Packet: ~p~n", [Packet]),
-			%% Send packet to worker. 
-			loop(Socket, Transport);
+			{ok, PacketData} = read_full_packet(Socket, Transport, DataTypes),
+			Packet = list_to_tuple([PacketName| [PacketId|PacketData]]), % create record
+			gen_server:cast(PlayerPid, {pkt, Packet}),                   % it's must be defined in *packets.hrl
+			loop(Socket, Transport, PlayerPid);
 		_ ->
 			ok = Transport:close(Socket)
 	end.
 
+% ======================================================================
+% decoding
+% ======================================================================
 
 read_full_packet(Socket, Transport, DataTypes) ->
-	%% 1. get max length for read from net
-	%%%% [{11, [int, bool, float, string]}, {8, [double]}]
-	%% 2. Get data from net
-	%% 3. parse data and put into accumulator
-	%% 3. goto 1
 	PacketSizeInfo = minecraft_packet:packet_size(DataTypes),
-	io:format("PacketSizeInfo ~p~n", [PacketSizeInfo]),
 	read_full_packet(Socket, Transport, DataTypes, PacketSizeInfo, []).
 
 read_full_packet(_Socket, _Transport, [], [], Acc) ->
@@ -47,39 +43,93 @@ read_full_packet(_Socket, _Transport, [], [], Acc) ->
 
 read_full_packet(Socket, Transport, DataTypes, [Size|PacketSizeInfo], Acc) ->
 	case Size of
-		Length when is_integer(Length) -> 
-			{ok, Data} = Transport:recv(Socket, Length, ?TIMEOUT),
-			{ok, TailDataTypes, Out} = decode_values(Data, DataTypes);
-		Type -> 
+		Length when is_integer(Length) ->
+			{ok, BinData} = Transport:recv(Socket, Length, ?TIMEOUT),
+			{ok, TailDataTypes, Out} = decode_values(BinData, DataTypes);
+		Type when is_atom(Type) ->
 			Out = read_value(Socket, Transport, Type),
 			[_|TailDataTypes] = DataTypes
 	end,
 	read_full_packet(Socket, Transport, TailDataTypes, PacketSizeInfo, Out ++ Acc).
-	
-decode_values(Data, DataTypes) ->
-	decode_values(Data, DataTypes, []).
 
-decode_values(<<>>, DataTypes, Values) -> 
+decode_values(BinData, DataTypes) ->
+	decode_values(BinData, DataTypes, []).
+
+decode_values(<<>>, DataTypes, Values) ->
 	{ok, DataTypes, lists:reverse(Values)};
 
-decode_values(Data, [Type|DataTypes], Values) ->
+decode_values(BinData, [Type|DataTypes], Values) ->
 	case Type of
-		bool -> 
-			<<B:8,Rest/binary>> = Data,
+		bool ->
+			<<B:8,Rest/binary>> = BinData,
 			V = B =:= 1;
-		byte   ->  <<V:8/signed,Rest/binary>> = Data;
-		ubyte  ->  <<V:8,Rest/binary>> = Data;
-		short  ->  <<V:16/signed,Rest/binary>> = Data;
-		ushort ->  <<V:16,Rest/binary>> = Data;
-		int    ->  <<V:32/signed,Rest/binary>> = Data;
-		long   ->  <<V:64/signed,Rest/binary>> = Data;
-		float  ->  <<V:32/float,Rest/binary>> = Data;
-		double ->  <<V:64/float,Rest/binary>> = Data
+		byte   ->  <<V:8/signed,Rest/binary>> = BinData;
+		ubyte  ->  <<V:8,Rest/binary>> = BinData;
+		short  ->  <<V:16/signed,Rest/binary>> = BinData;
+		ushort ->  <<V:16,Rest/binary>> = BinData;
+		int    ->  <<V:32/signed,Rest/binary>> = BinData;
+		long   ->  <<V:64/signed,Rest/binary>> = BinData;
+		float  ->  <<V:32/float,Rest/binary>> = BinData;
+		double ->  <<V:64/float,Rest/binary>> = BinData
 	end,
 	decode_values(Rest, DataTypes, [V|Values]).
 
 read_value(Socket, Transport, string) ->
 	{ok, <<Characters:16>>} = Transport:recv(Socket, 2, ?TIMEOUT),
 	Size = Characters*2, %% UTF-16
-	{ok, Data} = Transport:recv(Socket, Size, ?TIMEOUT),
-	[Data].
+	{ok, BinData} = Transport:recv(Socket, Size, ?TIMEOUT),
+	[BinData].
+
+read_value(Socket, Transport, byte_array) ->
+	{ok, <<Size:16>>} = Transport:recv(Socket, 2, ?TIMEOUT),
+	{ok, BinData} = Transport:recv(Socket, Size, ?TIMEOUT),
+	[BinData].
+
+
+% ======================================================================
+% encoding
+% ======================================================================
+
+-spec encode_packet(any()) -> binary().
+encode_packet(Packet) ->
+	[_PacketName, PacketId | Values] = tuple_to_list(Packet),
+	{ok, _, DataTypes} = minecraft_packet:get_header(PacketId),
+	encode_values(Values, DataTypes).
+
+encode_values(Values, DataTypes) ->
+	encode_values(Values, DataTypes, Out).
+
+encode_values([], [], Out) ->
+	list_to_binary(lists:reverse(Out)) .
+
+encode_values([V|Values], [Type|DataTypes], Out) ->
+	O = case Type of
+		bool -> encode_bool(V);
+		byte   ->  <<V:8/signed>>;
+		ubyte  ->  <<V:8>>;
+		short  ->  <<V:16/signed>>;
+		ushort ->  <<V:16>>;
+		int    ->  <<V:32/signed>>;
+		long   ->  <<V:64/signed>>;
+		float  ->  <<V:32/float>>;
+		double ->  <<V:64/float>>;
+		byte_array -> V
+	end,
+	encode_values(Values, DataTypes, [O|Out]).
+
+encode_bool(true) ->
+	<<1>>.
+encode_bool(false) ->
+	<<0>>.
+
+
+%% Private stuff
+
+async_writer(Transport, Socket) ->
+    receive
+        {stop, Reason} ->
+            exit(Reason);
+        {packet, Packet} ->
+            Transport:send(Socket, encode_packet(Packet)),
+            async_writer(Transport, Socket)
+    end.
