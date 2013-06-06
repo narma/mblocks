@@ -12,3 +12,4 @@ You can then start the Erlang node with the following command:
 ./start.sh
 ```
 
+This project is at the early stage of development and done from time to time just for fun
